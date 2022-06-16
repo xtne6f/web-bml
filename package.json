@@ -55,6 +55,7 @@
   },
   "private": true,
   "workspaces": [
-    "./node-aribts"
+    "./node-aribts",
+    "./play-ts"
   ]
 }
