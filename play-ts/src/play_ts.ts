@@ -36,16 +36,15 @@ const bmlBrowser = new BMLBrowser({
     epg,
 });
 
-let invisibleState = true;
 let forceInvisible = false;
-let browserInvisible = false;
+let browserInvisible = true;
 let windowWidth = 0;
 let windowHeight = 0;
 let contentWidth = 0;
 let contentHeight = 0;
 
 function onVisibleSizeChanged() {
-    if (!invisibleState && contentWidth > 0 && contentHeight > 0) {
+    if (!forceInvisible && !browserInvisible && contentWidth > 0 && contentHeight > 0) {
         contentElement.style.width = windowWidth + "px";
         contentElement.style.height = windowHeight + "px";
         const scaleX = windowWidth / contentWidth;
@@ -57,8 +56,7 @@ function onVisibleSizeChanged() {
 }
 
 function onInvisibleChanged() {
-    if (invisibleState && !forceInvisible && !browserInvisible) {
-        invisibleState = false;
+    if (!forceInvisible && !browserInvisible) {
         invisibleVideoContainer.style.display = "none";
         contentElement.style.display = "block";
         onVisibleSizeChanged();
@@ -74,8 +72,7 @@ function onInvisibleChanged() {
         if (obj != null) {
             obj.appendChild(videoContainer);
         }
-    } else if (!invisibleState && (forceInvisible || browserInvisible)) {
-        invisibleState = true;
+    } else if (forceInvisible || browserInvisible) {
         invisibleVideoContainer.style.display = "";
         contentElement.style.display = "";
         contentElement.style.transform = "";
