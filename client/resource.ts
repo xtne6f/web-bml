@@ -1,3 +1,4 @@
+import { parseMediaTypeFromString } from "../server/entity_parser";
 import { ComponentPMT, MediaType, ModuleListEntry, ProgramInfoMessage, ResponseMessage } from "../server/ws_api";
 import { Indicator, IP } from "./bml_browser";
 
@@ -71,6 +72,7 @@ type ComponentRequest = {
 type ModuleRequest = {
     filename: string | null,
     resolve: (resolveValue: CachedFile | null) => void,
+    requestType: "lockModuleOnMemory" | "lockModuleOnMemoryEx" | undefined,
 };
 
 type RemoteResourceRequest = {
@@ -150,6 +152,13 @@ class CacheMap {
     }
 }
 
+export enum Profile {
+    BS = 0x0007,
+    CS = 0x000b,
+    TrProfileA = 0x000c,
+    TrProfileC = 0x000d,
+}
+
 export class Resources {
     private readonly indicator?: Indicator;
     private readonly eventTarget: ResourcesEventTarget = new EventTarget();
@@ -162,6 +171,12 @@ export class Resources {
     public constructor(indicator: Indicator | undefined, ip: IP) {
         this.indicator = indicator;
         this.ip = ip;
+    }
+
+    private _profile?: Profile;
+
+    public get profile(): Profile | undefined {
+        return this._profile;
     }
 
     private _activeDocument: null | string = null;
@@ -273,6 +288,7 @@ export class Resources {
 
     private revokeCachedFile(file: CachedFile): void {
         for (const blob of file.blobUrl.values()) {
+            console.log("revoke", blob.blobUrl);
             URL.revokeObjectURL(blob.blobUrl);
         }
         file.blobUrl.clear();
@@ -286,6 +302,7 @@ export class Resources {
         if (this.lockedComponents.get(componentId)?.modules?.has(module.moduleId)) {
             return;
         }
+        console.log("revoke", moduleAndComponentToString(componentId, module.moduleId));
         for (const file of module.files.values()) {
             this.revokeCachedFile(file);
         }
@@ -503,6 +520,9 @@ export class Resources {
             const prevComponents = this.pmtComponents;
             // 0x0d: データカルーセル
             this.pmtComponents = new Map(msg.components.filter(x => x.streamType === 0x0d).map(x => [x.componentId, x]));
+            if (prevComponents.size === 0) {
+                this._profile = this.pmtComponents.get(0x40)?.dataComponentId ?? this.pmtComponents.get(0x80)?.dataComponentId;
+            }
             for (const [componentId, creqs] of this.componentRequests) {
                 if (this.pmtComponents.has(componentId)) {
                     continue;
@@ -701,9 +721,17 @@ export class Resources {
             }
             return null;
         }
+        const contentType = headers.get("content-type");
+        let mediaType: MediaType = { originalSubtype: "", originalType: "", parameters: [], subtype: "", type: "" };
+        if (contentType != null) {
+            const result = parseMediaTypeFromString(contentType);
+            if (result.mediaType != null) {
+                mediaType = result.mediaType;
+            }
+        }
         const file: RemoteCachedFile = {
             contentLocation: null,
-            contentType: { originalSubtype: "", originalType: "", parameters: [], subtype: "", type: "" },
+            contentType: mediaType,
             data: response,
             blobUrl: new Map<any, CachedFileMetadata>(),
             cacheControl: headers.get("Cache-Control")?.toLowerCase()
@@ -717,7 +745,15 @@ export class Resources {
         return file;
     }
 
-    public fetchResourceAsync(url: string): Promise<CachedFile | null> {
+    public invalidateRemoteCache(url: string): void {
+        if (this.ip.get == null || this.activeDocument == null || this.baseURIDirectory == null) {
+            return;
+        }
+        const full = this.activeDocument.startsWith("http://") || this.activeDocument.startsWith("https://") ? new URL(url, this.activeDocument).toString() : url;
+        this.cachedRemoteResources.delete(full);
+    }
+
+    public fetchResourceAsync(url: string, requestType?: "lockModuleOnMemory" | "lockModuleOnMemoryEx"): Promise<CachedFile | null> {
         if (this.isInternetContent) {
             if (
                 ((this.activeDocument?.startsWith("http://") || this.activeDocument?.startsWith("https://")) && !url.startsWith("arib://") && !url.startsWith("arib-dc://")) ||
@@ -751,7 +787,7 @@ export class Resources {
         console.warn("async fetch requested", url);
         return new Promise((resolve, _) => {
             const c = this.componentRequests.get(componentId);
-            const entry = { filename, resolve };
+            const entry = { filename, resolve, requestType };
             if (c == null) {
                 this.componentRequests.set(componentId, { moduleRequests: new Map<number, ModuleRequest[]>([[moduleId, [entry]]]) });
             } else {
@@ -766,10 +802,20 @@ export class Resources {
         });
     }
 
-    public *getLockedModules() {
+    public *getLockedModules(): Generator<{ module: string, isEx: boolean, requesting: boolean }> {
+        for (const [componentId, c] of this.componentRequests) {
+            for (const [moduleId, m] of c.moduleRequests) {
+                for (const request of m.reverse()) {
+                    if (request.requestType != null) {
+                        yield { module: `/${moduleAndComponentToString(componentId, moduleId)}`, isEx: request.requestType === "lockModuleOnMemoryEx", requesting: true };
+                        break;
+                    }
+                }
+            }
+        }
         for (const c of this.lockedComponents.values()) {
             for (const m of c.modules.values()) {
-                yield { module: `/${moduleAndComponentToString(c.componentId, m.moduleId)}`, isEx: m.lockedBy === "lockModuleOnMemoryEx" };
+                yield { module: `/${moduleAndComponentToString(c.componentId, m.moduleId)}`, isEx: m.lockedBy === "lockModuleOnMemoryEx", requesting: false };
             }
         }
     }
@@ -833,9 +879,8 @@ export class Resources {
         // this.cachedComponents.clear();
     }
 
-    // Cプロファイルだと0x80
     public get startupComponentId(): number {
-        return 0x40;
+        return this._profile === Profile.TrProfileC ? 0x80 : 0x40;
     }
 
     public get startupModuleId(): number {

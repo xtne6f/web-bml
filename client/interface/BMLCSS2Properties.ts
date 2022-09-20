@@ -1,94 +1,123 @@
-import { BMLBrowserEventTarget } from "../bml_browser";
-import { colorIndexToVar, varToColorIndex } from "../transpile_css";
+import { BMLBrowserEventTarget, KeyGroup } from "../bml_browser";
+import { colorIndexToVar, setFontSize, varToColorIndex } from "../transpile_css";
 
 type DOMString = string;
 
+export class BMLCSSStyleDeclaration {
+    private readonly baseDeclarationMap: Map<string, string>;
+    private readonly declarationMap: Map<string, string>;
+    private readonly computedPropertyGetter: (property: string) => string;
+    private readonly propertySetter: (property: string, value: string) => void;
+
+    public constructor(baseDeclarationMap: Map<string, string>, declarationMap: Map<string, string>, computedPropertyGetter: (property: string) => string, propertySetter: (property: string, value: string) => void) {
+        this.baseDeclarationMap = baseDeclarationMap;
+        this.declarationMap = declarationMap;
+        this.computedPropertyGetter = computedPropertyGetter;
+        this.propertySetter = propertySetter;
+    }
+
+    public setProperty(property: string, value: string): void {
+        // 一旦削除して列挙が設定順にされるようにしておく
+        this.declarationMap.delete(property);
+        this.declarationMap.set(property, value);
+        this.propertySetter(property, value);
+    }
+
+    public getPropertyValue(property: string): string {
+        return this.declarationMap.get(property) ?? this.baseDeclarationMap.get(property) ?? this.computedPropertyGetter(property);
+    }
+}
+
 export class BMLCSS2Properties {
-    private readonly declaration: CSSStyleDeclaration;
-    private readonly declarationToSet: CSSStyleDeclaration;
+    private readonly declaration: BMLCSSStyleDeclaration;
     private readonly node: HTMLElement;
     private readonly eventTarget: BMLBrowserEventTarget;
-    public constructor(declaration: CSSStyleDeclaration, declarationToSet: CSSStyleDeclaration, node: HTMLElement, eventTarget: BMLBrowserEventTarget) {
+    public constructor(declaration: BMLCSSStyleDeclaration, node: HTMLElement, eventTarget: BMLBrowserEventTarget) {
         this.declaration = declaration;
-        this.declarationToSet = declarationToSet;
         this.node = node;
         this.eventTarget = eventTarget;
     }
 
-    private getColorIndexVariable(bmlPropName: string, propName: keyof typeof this.declaration): DOMString {
+    private getColorIndexVariable(bmlPropName: string, cssPropName: string): DOMString {
         const v = this.declaration.getPropertyValue("--" + bmlPropName).trim();
-        if (v != "") {
+        if (v !== "") {
             return v;
         }
-        return varToColorIndex(this.declaration[propName] as string) ?? "";
+        return varToColorIndex(this.declaration.getPropertyValue(cssPropName)) ?? "";
     }
 
-    private setColorIndexVariable(bmlPropName: string, propName: keyof typeof this.declaration, value: DOMString | null) {
-        this.declarationToSet.setProperty("--" + bmlPropName, value);
-        if (propName === "backgroundColor") {
-            this.declarationToSet.setProperty("--background-color", colorIndexToVar(value) ?? "");
+    private setColorIndexVariable(bmlPropName: string, cssPropName: string, value: DOMString) {
+        this.declaration.setProperty("--" + bmlPropName, value);
+        if (cssPropName === "background-color") {
+            this.declaration.setProperty("--background-color", colorIndexToVar(value) ?? "");
             // videoPlaneModeEnabledの場合bodyにはbackground-colorを設定しない
-            if (this.declarationToSet.backgroundColor === "transparent") {
+            if (this.declaration.getPropertyValue("background-color") === "transparent") {
                 return;
             }
         }
-        this.declarationToSet[propName as any] = colorIndexToVar(value) ?? "";
+        this.declaration.setProperty(cssPropName, colorIndexToVar(value) ?? "");
     }
 
-    public get paddingTop() { return this.declaration.paddingTop; }
-    public get paddingRight() { return this.declaration.paddingRight; }
-    public get paddingBottom() { return this.declaration.paddingBottom; }
-    public get paddingLeft() { return this.declaration.paddingLeft; }
-    public get borderWidth() { return this.declaration.borderWidth; }
-    public get borderStyle() { return this.declaration.borderStyle; }
-    public get left() { return this.declaration.left; }
-    public set left(value: DOMString) { this.declarationToSet.left = value; }
-    public get top() { return this.declaration.top; }
-    public set top(value: DOMString) { this.declarationToSet.top = value; }
-    public get width() { return this.declaration.width; }
-    public set width(value: DOMString) { this.declarationToSet.width = value; }
-    public get height() { return this.declaration.height; }
-    public set height(value: DOMString) { this.declarationToSet.height = value; }
-    public get lineHeight() { return this.declaration.lineHeight; }
-    public get visibility() { return this.declaration.visibility; }
-    public set visibility(value: DOMString) { this.declarationToSet.visibility = value; }
-    public get fontFamily() { return this.declaration.fontFamily; }
-    public set fontFamily(value: DOMString) { this.declarationToSet.fontFamily = value; }
-    public get fontSize() { return this.declaration.fontSize; }
-    public set fontSize(value: DOMString) { this.declarationToSet.fontSize = value; }
-    public get fontWeight() { return this.declaration.fontWeight; }
-    public set fontWeight(value: DOMString) { this.declarationToSet.fontWeight = value; }
-    public get textAlign() { return this.declaration.textAlign; }
-    public get letterSpacing() { return this.declaration.letterSpacing; }
+    public get paddingTop() { return this.declaration.getPropertyValue("padding-top"); }
+    public get paddingRight() { return this.declaration.getPropertyValue("padding-right"); }
+    public get paddingBottom() { return this.declaration.getPropertyValue("padding-bottom"); }
+    public get paddingLeft() { return this.declaration.getPropertyValue("padding-left"); }
+    public get borderWidth() { return this.declaration.getPropertyValue("border-width"); }
+    public get borderStyle() { return this.declaration.getPropertyValue("border-style"); }
+    public get left() { return this.declaration.getPropertyValue("left"); }
+    public set left(value: DOMString) { this.declaration.setProperty("left", value); }
+    public get top() { return this.declaration.getPropertyValue("top"); }
+    public set top(value: DOMString) { this.declaration.setProperty("top", value); }
+    public get width() { return this.declaration.getPropertyValue("width"); }
+    public set width(value: DOMString) { this.declaration.setProperty("width", value); }
+    public get height() { return this.declaration.getPropertyValue("height"); }
+    public set height(value: DOMString) { this.declaration.setProperty("height", value); }
+    public get lineHeight() { return this.declaration.getPropertyValue("--line-height-raw").trim(); }
+    public get visibility() { return this.declaration.getPropertyValue("visibility"); }
+    public set visibility(value: DOMString) { this.declaration.setProperty("visibility", value); }
+    public get fontFamily() { return this.declaration.getPropertyValue("font-family"); }
+    public set fontFamily(value: DOMString) { this.declaration.setProperty("font-family", value); }
+    public get fontSize(): DOMString {
+        const fontSize = this.declaration.getPropertyValue("--font-size-raw");
+        return fontSize.trim();
+    }
+    public set fontSize(value: DOMString) {
+        this.declaration.setProperty("--font-size-raw", String(value));
+        this.declaration.setProperty("--font-size", setFontSize(String(value)));
+    }
+    public get fontWeight() { return this.declaration.getPropertyValue("font-weight"); }
+    public set fontWeight(value: DOMString) { this.declaration.setProperty("font-weight", value); }
+    public get textAlign() { return this.declaration.getPropertyValue("text-align"); }
+    public get letterSpacing() { return this.declaration.getPropertyValue("letter-spacing"); }
     public get borderTopColorIndex() {
-        return this.getColorIndexVariable("border-top-color-index", "borderTopColor");
+        return this.getColorIndexVariable("border-top-color-index", "border-top-color");
     }
     public set borderTopColorIndex(value: DOMString) {
-        this.setColorIndexVariable("border-top-color-index", "borderTopColor", value);
+        this.setColorIndexVariable("border-top-color-index", "border-top-color", value);
     }
     public get borderRightColorIndex() {
-        return this.getColorIndexVariable("border-right-color-index", "borderRightColor");
+        return this.getColorIndexVariable("border-right-color-index", "border-right-color");
     }
     public set borderRightColorIndex(value: DOMString) {
-        this.setColorIndexVariable("border-right-color-index", "borderRightColor", value);
+        this.setColorIndexVariable("border-right-color-index", "border-right-color", value);
     }
     public get borderLeftColorIndex() {
-        return this.getColorIndexVariable("border-left-color-index", "borderLeftColor");
+        return this.getColorIndexVariable("border-left-color-index", "border-left-color");
     }
     public set borderLeftColorIndex(value: DOMString) {
-        this.setColorIndexVariable("border-left-color-index", "borderLeftColor", value);
+        this.setColorIndexVariable("border-left-color-index", "border-left-color", value);
     }
     public get borderBottomColorIndex() {
-        return this.getColorIndexVariable("border-bottom-color-index", "borderBottomColor");
+        return this.getColorIndexVariable("border-bottom-color-index", "border-bottom-color");
     }
     public set borderBottomColorIndex(value: DOMString) {
-        this.setColorIndexVariable("border-bottom-color-index", "borderBottomColor", value);
+        this.setColorIndexVariable("border-bottom-color-index", "border-bottom-color", value);
     }
     public get backgroundColorIndex() {
-        return this.getColorIndexVariable("background-color-index", "backgroundColor");
+        return this.getColorIndexVariable("background-color-index", "background-color");
     }
     public set backgroundColorIndex(value: DOMString) {
-        this.setColorIndexVariable("background-color-index", "backgroundColor", value ?? "");
+        this.setColorIndexVariable("background-color-index", "background-color", value ?? "");
     }
     public get colorIndex() {
         return this.getColorIndexVariable("color-index", "color");
@@ -100,7 +129,7 @@ export class BMLCSS2Properties {
         return this.declaration.getPropertyValue("--grayscale-color-index").trim();
     }
     public set grayscaleColorIndex(value: DOMString) {
-        this.declarationToSet.setProperty("--grayscale-color-index", value);
+        this.declaration.setProperty("--grayscale-color-index", value);
     }
     public get clut() {
         return this.declaration.getPropertyValue("--clut").trim();
@@ -130,16 +159,49 @@ export class BMLCSS2Properties {
         return this.declaration.getPropertyValue("--used-key-list").trim();
     }
     public set usedKeyList(value: DOMString) {
-        this.declarationToSet.setProperty("--used-key-list", value);
+        this.declaration.setProperty("--used-key-list", value);
         if (this.node instanceof HTMLBodyElement) {
             // bodyにfocus/activeは運用されない
             this.eventTarget.dispatchEvent<"usedkeylistchanged">(new CustomEvent("usedkeylistchanged", {
                 detail: {
-                    usedKeyList: new Set(value.split(" ").filter((x): x is "basic" | "numeric-tuning" | "data-button" => {
-                        return x === "basic" || x === "numeric-tuning" || x === "data-button";
+                    usedKeyList: new Set(value.split(" ").filter((x): x is KeyGroup => {
+                        return x === "basic" || x === "numeric-tuning" || x === "data-button" || x === "special-1" || x === "special-2";
                     }))
                 }
             }));
         }
+    }
+    // Cプロファイル
+    public get borderTopColor() { return this.declaration.getPropertyValue("border-top-color"); }
+    public set borderTopColor(value: DOMString) { this.declaration.setProperty("border-top-color", value); }
+    public get borderRightColor() { return this.declaration.getPropertyValue("border-right-color"); }
+    public set borderRightColor(value: DOMString) { this.declaration.setProperty("border-right-color", value); }
+    public get borderBottomColor() { return this.declaration.getPropertyValue("border-bottom-color"); }
+    public set borderBottomColor(value: DOMString) { this.declaration.setProperty("border-bottom-color", value); }
+    public get borderLeftColor() { return this.declaration.getPropertyValue("border-left-color"); }
+    public set borderLeftColor(value: DOMString) { this.declaration.setProperty("border-left-color", value); }
+    public get backgroundColor() { return this.declaration.getPropertyValue("--background-color").trim(); }
+    // Cプロファイルで<a>でフォーカスが当たった時背景色を文字色を入れ替えるために変数としても追加する
+    public set backgroundColor(value: DOMString) {
+        this.declaration.setProperty("--background-color", value);
+        this.declaration.setProperty("--background-color-inherit", value);
+        this.declaration.setProperty("background-color", value);
+    }
+    public get color() { return this.declaration.getPropertyValue("--color").trim(); }
+    public set color(value: DOMString) {
+        this.declaration.setProperty("--color", value);
+        this.declaration.setProperty("color", value);
+    }
+    public get WapMarqueeStyle() {
+        return this.declaration.getPropertyValue("---wap-marquee-style").trim();
+    }
+    public get WapMarqueeLoop() {
+        return this.declaration.getPropertyValue("---wap-marquee-loop").trim();
+    }
+    public get WapMarqueeSpeed() {
+        return this.declaration.getPropertyValue("---wap-marquee-speed").trim();
+    }
+    public get WapInputFormat() {
+        return this.declaration.getPropertyValue("---wap-input-format").trim();
     }
 }

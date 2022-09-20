@@ -73,6 +73,12 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
     // 字幕/文字スーパーのPESのPID
     let privatePes = new Set<number>();
 
+    // ワンセグの場合0x1fc8-0x1fcfまでの固定PIDでPMTでワンセグのみを受信している場合PATは受信されない
+    // ワンセグPMTを10回受信する間にPATが未受信であればワンセグだと判定
+    let oneSegPMTCount = 0;
+    let oneSeg = false;
+    let patRetrieved = false;
+
     if (dumpError) {
         tsStream.on("drop", (pid: any, counter: any, expected: any) => {
             let time = "unknown";
@@ -121,6 +127,7 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
     });
 
     tsStream.on("pat", (pid: any, data: any) => {
+        patRetrieved = true;
         tsUtil.addPat(pid, data);
         const programs: { program_number: number, network_PID?: number, program_map_PID?: number }[] = data.programs;
         const pat = new Map<number, number>();
@@ -144,7 +151,14 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
 
     tsStream.on("pmt", (pid: any, data: any) => {
         // 多重化されている
-        if (pidToProgramNumber.size >= 2) {
+        if (!oneSeg && pidToProgramNumber.size !== 1) {
+            if (pidToProgramNumber.size === 0 && pid === 0x1fc8 && !patRetrieved) {
+                oneSegPMTCount++;
+                if (oneSegPMTCount >= 10) {
+                    oneSeg = true;
+                    programNumber ??= data.program_number;
+                }
+            }
             if (pidToProgramNumber.get(pid) !== (serviceId ?? programNumber)) {
                 return;
             }
@@ -159,6 +173,7 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
             const pid = stream.elementary_PID;
             let bxmlInfo: AdditionalAribBXMLInfo | undefined;
             let componentId: number | undefined;
+            let data_component_id: number | undefined;
             for (const esInfo of stream.ES_info) {
                 if (esInfo.descriptor_tag == 0x52) { // Stream identifier descriptor ストリーム識別記述子
                     // PID => component_tagの対応
@@ -166,7 +181,7 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
                     componentId = component_tag;
                 } else if (esInfo.descriptor_tag == 0xfd) { // Data component descriptor データ符号化方式記述子
                     let additional_data_component_info: Buffer = esInfo.additional_data_component_info;
-                    let data_component_id: number = esInfo.data_component_id;
+                    data_component_id = esInfo.data_component_id as number;
                     // FIXME!!!!!!!!
                     // aribtsの実装がおかしくてdata_component_idを8ビットとして読んでる
                     if (esInfo.additional_data_component_info.length + 1 === esInfo.descriptor_length) {
@@ -192,6 +207,7 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
                 pid,
                 bxmlInfo,
                 streamType: stream.stream_type,
+                dataComponentId: data_component_id,
             };
             ptc.set(pid, componentPMT);
             ctp.set(componentPMT.componentId, componentPMT);
@@ -290,14 +306,14 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
     });
 
     function getStreamInfo() {
-        if (!tsUtil.hasOriginalNetworkId() || !tsUtil.hasTransportStreamId() || !tsUtil.hasServiceIds() || !tsUtil.hasTransportStreams(tsUtil.getOriginalNetworkId())) {
+        if (!tsUtil.hasOriginalNetworkId() || !tsUtil.hasTransportStreamId() || !tsUtil.hasTransportStreams(tsUtil.getOriginalNetworkId())) {
             return;
         }
 
         return {
             onid: (tsUtil.getTransportStreams(tsUtil.getOriginalNetworkId()) as { [key: number]: any })[tsUtil.getTransportStreamId()].original_network_id,
             tsid: tsUtil.getTransportStreamId(),
-            sid: serviceId ?? tsUtil.getServiceIds()[0],
+            sid: serviceId ?? programNumber,
             nid: tsUtil.getOriginalNetworkId(),
         };
     }
@@ -327,29 +343,48 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
         if (data.events == null) {
             return;
         }
-        tsUtil.addEit(pid, data);
-
+        if (oneSeg && pid !== 0x0027) { // L-EIT
+            return;
+        } else if (!oneSeg && pid !== 0x0012) { // H-EIT
+            return;
+        }
         const ids = getStreamInfo();
-
         if (ids == null) {
             return;
         }
-
-        if (!tsUtil.hasPresent(ids.onid, ids.tsid, ids.sid)) {
+        if (ids.onid !== data.original_network_id || ids.sid !== ids.sid) {
             return;
         }
-
-        const p = tsUtil.getPresent(ids.onid, ids.tsid, ids.sid);
+        if (data.current_next_indicator === 0) {
+            return;
+        }
+        if (data.table_id !== 0x4e) { // 自TS, 現在/次のイベント情報
+            return;
+        }
+        if (data.section_number !== 0) { // 現在のイベント情報かどうか
+            return;
+        }
+        if (data.events.length !== 1) {
+            return;
+        }
+        const event = data.events[0];
+        const duration = new TsDate(event.duration).decodeTime();
+        const durationSeconds = duration[0] * 3600 + duration[1] * 60 + duration[2];
+        const startTime =  new TsDate(event.start_time).decode();
+        const eventId: number = event.event_id;
+        const descriptors: any[] = event.descriptors;
+        const shortEvent = descriptors.find(x => x.descriptor_tag === 0x4D); // 短形式イベント記述子
+        const shortEventName = shortEvent == null ? null : new TsChar(shortEvent.event_name_char).decode();
         const prevProgramInfo = currentProgramInfo;
         currentProgramInfo = {
             type: "programInfo",
-            eventId: p.event_id,
+            eventId: eventId,
             transportStreamId: ids.tsid,
             originalNetworkId: ids.onid,
             serviceId: ids.sid,
-            eventName: p.short_event?.event_name,
-            startTimeUnixMillis: p.start_time?.getTime(),
-            durationSeconds: p.durationSeconds,
+            eventName: shortEventName,
+            startTimeUnixMillis: startTime?.getTime(),
+            durationSeconds: durationSeconds,
             networkId: ids.nid,
         };
         if (prevProgramInfo?.eventId !== currentProgramInfo.eventId ||

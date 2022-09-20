@@ -9,6 +9,7 @@ import { ResponseMessage } from "../server/ws_api";
 import { playRomSound } from "./romsound";
 import { AudioNodeProvider, Indicator, IP, Reg } from "./bml_browser";
 import { decodeEUCJP, encodeEUCJP, stripStringEUCJP } from "./euc_jp";
+import { decodeShiftJIS, encodeShiftJIS } from "./shift_jis";
 // browser疑似オブジェクト
 
 export type LockedModuleInfo = [moduleName: string, func: number, status: number];
@@ -192,6 +193,13 @@ export interface Browser {
     // オプション
     // CS事業者専用領域に対する放送用拡張関数 (TR-B15 第四分冊)
     // async X_CSP_setAccessInfoToProviderArea(filename: string, structure: string): number;
+
+    // Cプロファイル
+    X_DPA_startResidentApp(appName: string, showAV: number, returnURI: string, ...Ex_info: string[]): number;
+    X_DPA_getComBrowserUA(): string[][];(): string[][];
+    X_DPA_launchDocWithLink(documentName: string): number;
+    X_DPA_getIRDID(type: number): string | null;
+    X_DPA_writeCproBM(title: string, dstURI: string, outline: string, CproBMtype: number, expire?: Date): number;
 }
 
 export interface AsyncBrowser {
@@ -440,6 +448,83 @@ const arib = new Map<string, any>([
     ["OSDResolution", osdResolution],
 ]);
 
+const cproAPIGroup = new Map([
+    ["Misc.Basic", 1],
+    ["EPG.Basic", 1],
+    ["EPG.Ext", 0],
+    ["Persistent.Basic", 1],
+    ["Com.IP.GetType ", 1],
+    ["Com.IP", 1],
+    ["Com.IP.Transmit", 1],
+    ["Ctrl.Basic", 1],
+    ["Ctrl.RAVersion", 1], // getResidentAppVersion
+    ["Ctrl.MobileDisplay", 0], // setFullDataDisplayArea
+    ["RomSound.Basic", 1],
+    ["Timer.Basic", 1],
+    ["Timer.DateMode", 1],
+    ["Storage.Ext", 0],
+    ["Print.MemoryCard1", 0],
+    ["Print.MemoryCard2", 0],
+    ["Xdpa.mailTo", 0],
+    ["Xdpa.RAStart", 1],
+    ["Xdpa.phoneTo", 0],
+    ["Xdpa.RcvCond", 0],
+    ["Xdpa.CurPos", 0],
+    ["Xdpa.saveExApp", 0],
+    ["Xdpa.startExAv", 0],
+    ["Xdpa.stopExAv", 0],
+    ["Xdpa.tuneRF", 0],
+    ["Xdpa.SchInfo", 0],
+    ["Xdpa.ComBrowserUA", 1],
+    ["Xdpa.AddressBook", 0],
+    ["Xdpa.launchWithL", 1],
+    ["Xdpa.chkAV", 0],
+    ["Xdpa.getIRDID", 1],
+    ["Xdpa.CproBM", 0],
+]);
+
+const cproResidentApp = new Map([
+    ["ComBrowser", 0],
+    ["Bookmark", 0],
+    ["JapaneseInput", 0],
+]);
+
+const cproWriteCproBM = new Map([
+    ["BMtype02", 0],
+    ["BMtype03", 0],
+    ["BMtype04", 0],
+]);
+
+const cproOSDResolution = new Map([
+    ["240x480", 1],
+]);
+
+const cproTransmissionProtocol = new Map<string, number | Map<string, number | Map<string | undefined, number>>>([
+    ["application", new Map<string, number | Map<string | undefined, number>>([
+        ["HTTP", new Map<string | undefined, number>([
+            [undefined, 1],
+            ["1.0", 1],
+            ["1.1", 1],
+        ])],
+        ["TLS", new Map<string | undefined, number>([
+            [undefined, 1],
+            ["1.0", 1],
+            ["1.1", 1],
+            ["1.2", 1],
+            ["1.3", 1],
+        ])],
+    ])],
+]);
+
+const dpaCpro = new Map<string, any>([
+    ["APIGroup", cproAPIGroup],
+    ["ResidentApp", cproResidentApp],
+    ["WriteCproBM", cproWriteCproBM],
+    ["OSDResolution", cproOSDResolution],
+    ["TransmissionProtocol", cproTransmissionProtocol],
+    ["BookmarkButton", 0],
+]);
+
 const bpa = new Map([
     ["APIGroup", new Map([
         ["Persistent.Media.Support.Ext", 0], // X_BPA_setAccessInfoOfPersistentArrayForAnotherProvider
@@ -458,6 +543,7 @@ export class BrowserAPI {
     private readonly indicator?: Indicator;
     private readonly ureg: Reg;
     private readonly greg: Reg;
+    private readonly X_DPA_startResidentApp?: (appName: string, showAV: number, returnURI: string, Ex_info: string[]) => number;
 
     constructor(
         resources: resource.Resources,
@@ -471,6 +557,7 @@ export class BrowserAPI {
         indicator: Indicator | undefined,
         ureg: Reg | undefined,
         greg: Reg | undefined,
+        X_DPA_startResidentApp: ((appName: string, showAV: number, returnURI: string, Ex_info: string[]) => number) | undefined,
     ) {
         this.resources = resources;
         this.eventQueue = eventQueue;
@@ -489,6 +576,7 @@ export class BrowserAPI {
             getReg: (index) => this.browser.Greg[index],
             setReg: (index, value) => this.browser.Greg[index] = value,
         };
+        this.X_DPA_startResidentApp = X_DPA_startResidentApp;
     }
 
     asyncBrowser: AsyncBrowser = {
@@ -520,23 +608,29 @@ export class BrowserAPI {
                 return [NaN, "", ""];
             }
             function encodeBinary(data: Uint8Array): string {
-                const encoded: string[] = [];
+                let encoded = "";
                 for (const c of data) {
                     const s = String.fromCharCode(c);
                     if ((s >= "A" && s <= "Z") || (s >= "a" && s <= "z") || (s >= "0" && s <= "9") || "-_.!~*'()".indexOf(s) !== -1) {
-                        encoded.push(s);
+                        encoded += s;
                     } else {
-                        encoded.push("%");
-                        encoded.push(c.toString(16).padStart(2, "0"));
+                        encoded += "%";
+                        encoded += c.toString(16).padStart(2, "0");
                     }
                 }
-                return encoded.join("");
+                return encoded;
             }
             if (charset === "EUC-JP") {
                 this.indicator?.setNetworkingPostStatus(true);
                 const { resultCode, statusCode, response } = await this.ip.transmitTextDataOverIP(uri, new TextEncoder().encode("Denbun=" + encodeBinary(encodeEUCJP(text))));
                 this.indicator?.setNetworkingPostStatus(false);
                 return [resultCode, statusCode, decodeEUCJP(response)];
+            } else if (charset === "Shift_JIS") {
+                // Cプロファイル
+                this.indicator?.setNetworkingPostStatus(true);
+                const { resultCode, statusCode, response } = await this.ip.transmitTextDataOverIP(uri, new TextEncoder().encode("Denbun=" + encodeBinary(encodeShiftJIS(text))));
+                this.indicator?.setNetworkingPostStatus(false);
+                return [resultCode, statusCode, decodeShiftJIS(response)];
             } else {
                 return [NaN, "", ""];
             }
@@ -592,7 +686,7 @@ export class BrowserAPI {
     }
 
     public setGreg(index: number, value: string) {
-        if (index > 0 && index < this.browser.Greg.length) {
+        if (index >= 0 && index < this.browser.Greg.length) {
             this.greg.setReg(index, stripStringEUCJP(value, 256));
         }
     }
@@ -606,7 +700,7 @@ export class BrowserAPI {
     }
 
     public setUreg(index: number, value: string) {
-        if (index > 0 && index < this.browser.Ureg.length) {
+        if (index >= 0 && index < this.browser.Ureg.length) {
             this.ureg.setReg(index, stripStringEUCJP(value, 256));
         }
     }
@@ -749,7 +843,7 @@ export class BrowserAPI {
             const cachedModule = this.resources.lockCachedModule(componentId, moduleId, "lockModuleOnMemory");
             if (!cachedModule) {
                 console.warn("lockModuleOnMemory: module not cached", module);
-                this.resources.fetchResourceAsync(module).then(() => {
+                this.resources.fetchResourceAsync(module, "lockModuleOnMemory").then(() => {
                     const cachedModule = this.resources.lockCachedModule(componentId, moduleId, "lockModuleOnMemory");
                     if (cachedModule == null) {
                         // 発生しない?
@@ -769,9 +863,11 @@ export class BrowserAPI {
             if (componentId == null || moduleId == null || module == null) {
                 return NaN;
             }
-            // TR-B14 第二分冊 5.12.6.9 (6) 参照
-            if (componentId !== 0x40 && componentId !== 0x50 && componentId !== 0x60) {
-                return NaN;
+            if (this.resources.profile !== resource.Profile.TrProfileC) {
+                // TR-B14 第二分冊 5.12.6.9 (6) 参照
+                if (componentId !== 0x40 && componentId !== 0x50 && componentId !== 0x60) {
+                    return NaN;
+                }
             }
             // lockModuleOnMemoryでロックされているモジュールをlockModuleOnMemoryExでロックできない
             if (this.resources.getModuleLockedBy(componentId, moduleId) === "lockModuleOnMemory") {
@@ -792,7 +888,7 @@ export class BrowserAPI {
             if (!cachedModule) {
                 const dataEventId = this.resources.getDownloadComponentInfo(componentId)?.dataEventId;
                 console.warn("lockModuleOnMemoryEx: module not cached", module);
-                this.resources.fetchResourceAsync(module).then(() => {
+                this.resources.fetchResourceAsync(module, "lockModuleOnMemoryEx").then(() => {
                     if (dataEventId != null) {
                         const eid = this.resources.getDownloadComponentInfo(componentId)?.dataEventId;
                         if (eid != null && eid !== dataEventId) {
@@ -846,7 +942,7 @@ export class BrowserAPI {
                     // filesizeのキャッシュを備えているかどうか
                     const filesize = Number(additionalinfo2);
                     // ひとまず10 MiB
-                    return filesize <= 1024 * 1024 * 10 ? 1 : 0;
+                    return filesize * 1024 <= 1024 * 1024 * 10 ? 1 : 0;
                 } else if (functionname === "AudioFile") {
                     // filesizeの音声ファイルを再生可能かどうか
                     const filesize = Number(additionalinfo);
@@ -894,13 +990,69 @@ export class BrowserAPI {
                     return 0;
                 }
                 return a1;
+            } else if (sProvider === "DPACpro") {
+                // Cプロファイル
+                if (functionname === "BMLversion") {
+                    if (additionalinfo == null) {
+                        // 12.0
+                        return 1;
+                    } else {
+                        const [major, minor] = additionalinfo.split(".").map(x => Number.parseInt(x));
+                        if (major == null || minor == null) {
+                            return 0;
+                        }
+                        if ((major < 12 && major >= 0) || (major === 12 && minor === 0)) {
+                            return 1;
+                        }
+                        return 0;
+                    }
+                } else if (functionname === "MediaDecoder") {
+                    // TODO
+                } else if (functionname === "Storage" && additionalinfo === "cachesize") {
+                    // filesizeのキャッシュを備えているかどうか
+                    const filesize = Number(additionalinfo2);
+                    // ひとまず10 MiB
+                    return filesize * 1024 <= 1024 * 1024 * 10 ? 1 : 0;
+                } else if (functionname === "AudioFile") {
+                    // filesizeの音声ファイルを再生可能かどうか
+                    const filesize = Number(additionalinfo);
+                    // ひとまず10 MiB
+                    return filesize <= 1024 * 1024 * 10 ? 1 : 0;
+                }
+                const f = dpaCpro.get(functionname);
+                if (f == null) {
+                    console.error("unknown getBrowserSupport functionname", sProvider, functionname, ...additionalinfoList);
+                    return 0;
+                }
+                const a1 = f.get(additionalinfo);
+                if (a1 == null) {
+                    console.error("unknown getBrowserSupport additionalinfo", sProvider, functionname, ...additionalinfoList);
+                    return 0;
+                }
+                if (typeof a1 === "number") {
+                    return a1;
+                }
+                const a2 = a1.get(additionalinfo2);
+                if (a2 == null) {
+                    console.error("unknown getBrowserSupport additionalinfo2", sProvider, functionname, ...additionalinfoList);
+                    return 0;
+                }
+                if (typeof a2 === "number") {
+                    return a2;
+                }
+                const a3 = a2.get(additionalinfo3);
+                if (a3 == null) {
+                    console.error("unknown getBrowserSupport additionalinfo2", sProvider, functionname, ...additionalinfoList);
+                    return 0;
+                }
+                return a3;
             }
             console.error("unknown getBrowserSupport", sProvider, functionname, ...additionalinfoList);
             return 0;
         },
         getBrowserStatus: (sProvider: string, statusname: string, additionalinfo: string): number => {
             console.log("getBrowserStatus", sProvider, statusname, additionalinfo);
-            if (sProvider === "TerrP") {
+            if (sProvider === "TerrP" || sProvider === "DPA" /* Cプロファイル */) {
                 if (statusname === "IRDState") {
                     if (additionalinfo === "Link") {
                         // リンク状態のみ実装
@@ -962,14 +1114,16 @@ export class BrowserAPI {
             return activeDocument;
         },
         getResidentAppVersion(appName: string): any[] | null {
+            // Cプロファイルでもこの関数は運用される
+            // ただしappNameにComBrowserは指定しない (TR-B14 第三分冊 7.10.6)
             console.log("getResidentAppVersion", appName);
             return null;
         },
         getLockedModuleInfo: (): LockedModuleInfo[] | null => {
             console.log("getLockedModuleInfo");
             const l: LockedModuleInfo[] = [];
-            for (const { module, isEx } of this.resources.getLockedModules()) {
-                l.push([module, isEx ? 2 : 1, 1]);
+            for (const { module, isEx, requesting } of this.resources.getLockedModules()) {
+                l.push([module, isEx ? 2 : 1, requesting ? 2 : 1]);
             }
             return l;
         },
@@ -1072,6 +1226,78 @@ export class BrowserAPI {
             const npt = Math.floor((this.content.getNPT90kHz() ?? NaN) / 90);
             console.log("getNPT", npt);
             return npt;
+        },
+        // Cプロファイル
+        X_DPA_getComBrowserUA: (): string[][] => {
+            return [
+                [
+                    // メーカーID
+                    // 2D: KDDI
+                    // 2E: J-PHONE
+                    // 2F: NTT DoCoMo
+                    "00",
+                    // User-Agent
+                    ""
+                ]
+            ];
+        },
+        X_DPA_startResidentApp: (appName: string, showAV: number, returnURI: string, ...Ex_info: string[]): number => {
+            appName = String(appName);
+            showAV = Number(showAV);
+            returnURI = String(returnURI);
+            Ex_info = Ex_info.map(x => String(x));
+            if (this.X_DPA_startResidentApp != null) {
+                return this.X_DPA_startResidentApp(appName, showAV, returnURI, Ex_info);
+            }
+            if (appName === "ComBrowser") {
+                const uri = String(Ex_info[0]);
+                // const mode = String(Ex_info[1]);
+                // const fullscreen = String(Ex_info[2]) === "1";
+                return NaN;
+            } else if (appName === "BookmarkList") {
+                return NaN;
+            }
+            return NaN;
+        },
+        X_DPA_getIRDID: (type: number): string | null => {
+            switch (type) {
+                // 受信機固有識別子
+                case 1:
+                    return null;
+                // 視聴者固有識別子
+                case 2:
+                    return null;
+                // 受信機固有識別子又は視聴者固有識別子
+                case 3:
+                    return null;
+            }
+            console.error("X_DPA_getIRDID: unknown type", type);
+            return null;
+        },
+        X_DPA_writeCproBM: (title: string, dstURI: string, outline: string, CproBMtype: number, expire?: Date): number => {
+            // テレビリンクの登録
+            console.error("X_DPA_writeCproBM", title, dstURI, outline, CproBMtype, expire);
+            return NaN;
+        },
+        X_DPA_launchDocWithLink: (documentName: string): number => {
+            console.log("%X_DPA_launchDocWithLink", "font-size: 4em", documentName);
+            if (this.resources.profile !== resource.Profile.TrProfileC) {
+                return NaN;
+            }
+            // 絶対URIを使用すること
+            // TR-B14 第三分冊 8.3.10.2
+            if (!documentName.startsWith("http://") && documentName.startsWith("https://")) {
+                return NaN;
+            }
+            if (!this.resources.isInternetContent) {
+                // 放送受信状態で使われた場合失敗動作となる
+                // エラーメッセージを表示すべき (8.3.11.4)
+                this.content.quitDocument();
+                return NaN;
+            }
+            this.content.launchDocument(documentName, { withLink: true });
+            this.interpreter.destroyStack();
+            throw new Error("unreachable!!");
         },
     } as Browser;
 
