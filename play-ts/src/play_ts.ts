@@ -1,7 +1,9 @@
+import { TsStream } from "@chinachu/aribts";
+import { decodeTS, decodeTSSection } from "../../server/decode_ts";
+import { TsSectionParser } from "../../server/ts_section_parser";
 import { ResponseMessage } from "../../server/ws_api";
 import { BMLBrowser, BMLBrowserFontFace, EPG } from "../../client/bml_browser";
 import { RemoteControl } from "../../client/remote_controller_client";
-import { decodeTS } from "../../server/decode_ts";
 
 // 動画が入っている要素
 const videoContainer = document.querySelector(".arib-video-container") as HTMLElement;
@@ -108,7 +110,8 @@ function onMessage(msg: ResponseMessage) {
 }
 
 // PES(字幕)には対応しない
-const tsStream = decodeTS({ sendCallback: onMessage });
+let tsStream: TsStream | null = null;
+let tsSectionParser: TsSectionParser | null = null;
 
 // TSパケットを追加する
 (window as any).bmlBrowserPlayTS = (data: Uint8Array, pcr?: number) => {
@@ -121,7 +124,28 @@ const tsStream = decodeTS({ sendCallback: onMessage });
         });
         lastPcr = pcr!;
     }
+    if (tsStream === null) {
+        tsStream = decodeTS({ sendCallback: onMessage });
+    }
     tsStream.parse(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+};
+
+// PSI/SIセクションを追加する
+// 入力objは基本的にUint8ArrayのPSI/SIセクション。ただし戻り値がnullでない場合
+// これを次回呼び出し以降の同一入力の代わりに使うことができる。
+(window as any).bmlBrowserPlayTSSection = (pid: number, obj: any, pcr?: number): any => {
+    if ((pcr ?? -1) >= 0 && lastPcr !== pcr!) {
+        onMessage({
+            type: "pcr",
+            pcrBase: pcr!,
+            pcrExtension: 0,
+        });
+        lastPcr = pcr!;
+    }
+    if (tsSectionParser === null) {
+        tsSectionParser = decodeTSSection({ sendCallback: onMessage });
+    }
+    return tsSectionParser.parse(pid, obj);
 };
 
 // BML画面を非表示にする。動画コンテナは非表示用の要素の下に戻る

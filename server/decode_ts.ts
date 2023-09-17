@@ -1,7 +1,9 @@
+import { EventEmitter } from "events";
 import stream from "stream";
 import { TsUtil, TsChar, TsStream, TsDate } from "@chinachu/aribts";
 import zlib from "zlib";
 import { EntityParser, MediaType, parseMediaType, entityHeaderToString, parseMediaTypeFromString } from './entity_parser';
+import { TsSectionParser } from "./ts_section_parser";
 import * as wsApi from "./ws_api";
 import { ComponentPMT, AdditionalAribBXMLInfo } from './ws_api';
 
@@ -53,8 +55,19 @@ type CachedComponent = {
 };
 
 export function decodeTS(options: DecodeTSOptions): TsStream {
-    const { sendCallback: send, serviceId, parsePES, dumpError } = options;
     const tsStream = new TsStream();
+    initializeDecodeTS(options, tsStream);
+    return tsStream;
+}
+
+export function decodeTSSection(options: DecodeTSOptions): TsSectionParser {
+    const tsSectionParser = new TsSectionParser();
+    initializeDecodeTS(options, tsSectionParser);
+    return tsSectionParser;
+}
+
+function initializeDecodeTS(options: DecodeTSOptions, tsStream: EventEmitter) {
+    const { sendCallback: send, serviceId, parsePES, dumpError } = options;
     const tsUtil = new TsUtil();
     let pmtRetrieved = false;
     let pidToComponent = new Map<number, ComponentPMT>();
@@ -230,7 +243,7 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
 
     tsStream.on("packet", (pid, data) => {
         if (privatePes.has(pid) && data.data_byte != null) {
-            const info = (tsStream.info as any)[pid];
+            const info = ((tsStream as TsStream).info as any)[pid];
             if (data.payload_unit_start_indicator) {
                 info.buffer.reset();
                 info.buffer.add(data.data_byte);
@@ -800,7 +813,6 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
             });
         }
     });
-    return tsStream;
 }
 
 function decodeAdditionalAribBXMLInfo(additional_data_component_info: Buffer): AdditionalAribBXMLInfo {
