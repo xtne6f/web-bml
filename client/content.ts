@@ -208,6 +208,7 @@ export class Content {
     private indicator?: Indicator;
     private fonts: FontFace[] = [];
     private readonly videoPlaneModeEnabled: boolean;
+    private readonly tunnelPointerToVideoPlaneEnabled: boolean;
     private loaded = false;
     private readonly inputApplication?: InputApplication;
     private npt?: NPT;
@@ -224,6 +225,7 @@ export class Content {
         bmlEventTarget: BMLBrowserEventTarget,
         indicator: Indicator | undefined,
         videoPlaneModeEnabled: boolean,
+        tunnelPointerToVideoPlaneEnabled: boolean,
         inputApplication: InputApplication | undefined,
         showErrorMessage: ((title: string, message: string, code?: string) => void) | undefined,
     ) {
@@ -237,6 +239,7 @@ export class Content {
         this.bmlEventTarget = bmlEventTarget;
         this.indicator = indicator;
         this.videoPlaneModeEnabled = videoPlaneModeEnabled;
+        this.tunnelPointerToVideoPlaneEnabled = tunnelPointerToVideoPlaneEnabled;
         this.inputApplication = inputApplication;
         this.showErrorMessage = showErrorMessage ?? this.defaultShowErrorMessage.bind(this);
 
@@ -396,6 +399,44 @@ export class Content {
 
     private getBody() {
         return this.documentElement.querySelector("body");
+    }
+
+    private tunnelPointerToVideoPlane() {
+        const body = this.getBody()!;
+        const videoElement = body.querySelector("[arib-type=\"video/X-arib-mpeg2\"]");
+        if (videoElement == null) {
+            return;
+        }
+        const videoElem = videoElement as HTMLElement;
+        // 自身と親を除外
+        const excludes = new Set<Element>();
+        let videoLeft = 0;
+        let videoTop = 0;
+        for (let parent: HTMLElement | null = videoElem; parent != null && parent !== body; parent = parent.parentElement) {
+            videoLeft += parent.offsetLeft;
+            videoTop += parent.offsetTop;
+            excludes.add(parent);
+        }
+        // 子を除外
+        videoElem.querySelectorAll("div, p, object").forEach(element => {
+            excludes.add(element);
+        });
+        // 非除外要素のうち動画プレーンと重なるもののポインターイベントを通過させる
+        body.querySelectorAll("div, p, object").forEach(element => {
+            if (!excludes.has(element)) {
+                const elem = element as HTMLElement;
+                let left = 0;
+                let top = 0;
+                for (let parent: HTMLElement | null = elem; parent != null && parent !== body; parent = parent.parentElement) {
+                    left += parent.offsetLeft;
+                    top += parent.offsetTop;
+                }
+                if (videoLeft < left + elem.clientWidth && left < videoLeft + videoElem.clientWidth &&
+                    videoTop < top + elem.clientHeight && top < videoTop + videoElem.clientHeight) {
+                    elem.style.pointerEvents = "none";
+                }
+            }
+        });
     }
 
     private clipVideoPlane(videoElement: Element | null) {
@@ -821,6 +862,9 @@ export class Content {
             if (!exit) {
                 this.eventQueue.unlockSyncEventQueue();
             }
+        }
+        if (this.tunnelPointerToVideoPlaneEnabled) {
+            this.tunnelPointerToVideoPlane();
         }
         console.debug("START PROC EVQ");
         if (await this.eventQueue.processEventQueue()) {

@@ -172,6 +172,8 @@ export type BMLBrowserOptions = {
      * 動画像が配置されている部分が切り抜かれるためvideochangedイベントに合わせて動画を配置する
      */
     videoPlaneModeEnabled?: boolean;
+    // 動画プレーンを覆う要素のポインターイベントを通過させる
+    tunnelPointerToVideoPlaneEnabled?: boolean;
     audioNodeProvider?: AudioNodeProvider;
     ip?: IP,
     inputApplication?: InputApplication;
@@ -244,6 +246,7 @@ export class BMLBrowser {
             this.eventTarget,
             this.indicator,
             options.videoPlaneModeEnabled ?? false,
+            options.tunnelPointerToVideoPlaneEnabled ?? false,
             options.inputApplication,
             options.showErrorMessage
         );
