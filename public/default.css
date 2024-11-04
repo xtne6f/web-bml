@@ -192,6 +192,7 @@ p {
 body {
     padding: 0!important; /* NHK BS1とかbodyにpadding: 6pt;があって崩れる? */
     margin: 0!important;
+    color: black!important;
 }
 
 :where(body) {
