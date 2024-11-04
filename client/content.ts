@@ -758,6 +758,10 @@ export class Content {
         body.style.minWidth = width + "px";
         body.style.maxHeight = height + "px";
         body.style.minHeight = height + "px";
+        this.documentElement.style.maxWidth = width + "px";
+        this.documentElement.style.minWidth = width + "px";
+        this.documentElement.style.maxHeight = height + "px";
+        this.documentElement.style.minHeight = height + "px";
         bmlBody.invisible = bmlBody.invisible;
         const usedKeyList = bodyStyle.getPropertyValue("--used-key-list");
         this.bmlEventTarget.dispatchEvent<"usedkeylistchanged">(new CustomEvent("usedkeylistchanged", {
