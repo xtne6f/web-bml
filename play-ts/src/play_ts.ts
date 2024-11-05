@@ -34,6 +34,7 @@ const bmlBrowser = new BMLBrowser({
         squareGothic
     },
     epg,
+    tunnelPointerToVideoPlaneEnabled: videoContainer.classList.contains("arib-video-container-tunnel-pointer"),
 });
 
 let forceInvisible = false;
@@ -84,7 +85,12 @@ function onInvisibleChanged() {
             video.style.width = "";
             video.style.height = "";
         }
-        invisibleVideoContainer.appendChild(videoContainer);
+        if (videoContainer.classList.contains("arib-video-container-prepend")) {
+            // 先頭に挿入
+            invisibleVideoContainer.insertBefore(videoContainer, invisibleVideoContainer.firstChild);
+        } else {
+            invisibleVideoContainer.appendChild(videoContainer);
+        }
     }
 }
 
