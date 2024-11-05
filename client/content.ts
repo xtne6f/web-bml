@@ -863,14 +863,14 @@ export class Content {
                 this.eventQueue.unlockSyncEventQueue();
             }
         }
-        if (this.tunnelPointerToVideoPlaneEnabled) {
-            this.tunnelPointerToVideoPlane();
-        }
         console.debug("START PROC EVQ");
         if (await this.eventQueue.processEventQueue()) {
             return true;
         }
         console.debug("END PROC EVQ");
+        if (this.tunnelPointerToVideoPlaneEnabled) {
+            this.tunnelPointerToVideoPlane();
+        }
         this.indicator?.setUrl(this.resources.activeDocument.replace(/(^https?:\/\/)[^/]+/, (_, g: string) => g + "…"), false);
         return false;
     }
