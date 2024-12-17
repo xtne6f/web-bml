@@ -63,7 +63,7 @@ function onInvisibleChanged() {
         onVisibleSizeChanged();
         videoContainer.style.width = "100%";
         videoContainer.style.height = "100%";
-        const video = videoContainer.querySelector("video");
+        const video = videoContainer.querySelector("video") || videoContainer.querySelector("canvas");
         if (video != null) {
             video.style.display = "block";
             video.style.width = "100%";
@@ -73,13 +73,13 @@ function onInvisibleChanged() {
         if (obj != null) {
             obj.appendChild(videoContainer);
         }
-    } else if (forceInvisible || browserInvisible) {
+    } else {
         invisibleVideoContainer.style.display = "";
         contentElement.style.display = "";
         contentElement.style.transform = "";
         videoContainer.style.width = "";
         videoContainer.style.height = "";
-        const video = videoContainer.querySelector("video");
+        const video = videoContainer.querySelector("video") || videoContainer.querySelector("canvas");
         if (video != null) {
             video.style.display = "";
             video.style.width = "";
