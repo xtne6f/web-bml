@@ -7,7 +7,7 @@
     "browserify-zlib": "^0.2.0",
     "buffer": "^6.0.3",
     "crc-32": "^1.2.2",
-    "css": "^3.0.0",
+    "css": "git+https://github.com/otya128/reworkcss-css.git#b29fc79faf40c8164b20a74ca818c28fab19cf71",
     "fast-xml-parser": "^4.0.11",
     "process": "^0.11.10",
     "stream-browserify": "^3.0.0",
@@ -17,10 +17,10 @@
     "build": "webpack --mode=production"
   },
   "devDependencies": {
-    "@types/css": "^0.0.33",
-    "@types/node": "^18.11.0",
+    "@types/css": "^0.0.38",
+    "@types/node": "^24.3.0",
     "ts-loader": "^9.4.1",
-    "typescript": "^4.8.4",
+    "typescript": "^5.9.2",
     "webpack": "^5.74.0",
     "webpack-cli": "^4.10.0"
   },
