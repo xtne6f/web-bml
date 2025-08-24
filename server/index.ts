@@ -1,6 +1,7 @@
 import Koa from 'koa';
 import Router from 'koa-router';
 import fs, { mkdirSync } from "fs"
+import fsAsync from "fs/promises";
 import 'dotenv/config'
 import path from "path";
 import stream from "stream";
@@ -14,8 +15,6 @@ import { randomUUID } from 'crypto';
 import { DataBroadcastingStream, LiveStream } from './stream/live_stream';
 import { HLSLiveStream } from './stream/hls_stream';
 import { decodeTS } from './decode_ts';
-import { downloadFonts } from './font';
-downloadFonts();
 
 let port = Number.parseInt(process.env.PORT ?? "");
 if (Number.isNaN(port)) {
@@ -184,12 +183,24 @@ router.get("/rounded-mplus-1m-arib.ttf", async ctx => {
 });
 
 // モトヤマルベリ
-router.get("/KosugiMaru-Regular.ttf", async ctx => {
-    ctx.body = fs.createReadStream("dist/KosugiMaru-Regular.ttf");
+router.get("/KosugiMaru-Regular.woff2", async ctx => {
+    const stat = await fsAsync.stat("fonts/KosugiMaru-Regular.woff2");
+    ctx.response.length = stat.size;
+    ctx.body = fs.createReadStream("fonts/KosugiMaru-Regular.woff2");
+    ctx.set("Content-Type", "font/woff2")
+});
+router.get("/KosugiMaru-Bold.woff2", async ctx => {
+    const stat = await fsAsync.stat("fonts/KosugiMaru-Bold.woff2");
+    ctx.response.length = stat.size;
+    ctx.body = fs.createReadStream("fonts/KosugiMaru-Bold.woff2");
+    ctx.set("Content-Type", "font/woff2")
 });
 // モトヤシーダ
-router.get("/Kosugi-Regular.ttf", async ctx => {
-    ctx.body = fs.createReadStream("dist/Kosugi-Regular.ttf");
+router.get("/Kosugi-Regular.woff2", async ctx => {
+    const stat = await fsAsync.stat("fonts/Kosugi-Regular.woff2");
+    ctx.response.length = stat.size;
+    ctx.body = fs.createReadStream("fonts/Kosugi-Regular.woff2");
+    ctx.set("Content-Type", "font/woff2")
 });
 
 router.get(/^\/api\/get\/(?<url>https?:\/\/.+)$/, async ctx => {
@@ -211,7 +222,8 @@ router.get(/^\/api\/get\/(?<url>https?:\/\/.+)$/, async ctx => {
         const key = ctx.req.rawHeaders[i];
         const value = ctx.req.rawHeaders[i + 1];
         if (allowedRequestHeaders.has(key.toLowerCase())) {
-            opts.headers![key] = value;
+            // @ts-expect-error
+            opts.headers[key] = value;
         }
     }
     const res = await new Promise<http.IncomingMessage>((resolve, reject) => {

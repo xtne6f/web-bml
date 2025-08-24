@@ -45,8 +45,8 @@ export interface EPG {
 export interface IP {
     isIPConnected?(): number;
     getConnectionType?(): number;
-    transmitTextDataOverIP?(uri: string, body: Uint8Array): Promise<{ resultCode: number, statusCode: string, response: Uint8Array }>;
-    get?(uri: string): Promise<{ response?: Uint8Array, headers?: Headers, statusCode?: number }>;
+    transmitTextDataOverIP?(uri: string, body: Uint8Array<ArrayBuffer>): Promise<{ resultCode: number, statusCode: string, response: Uint8Array }>;
+    get?(uri: string): Promise<{ response?: Uint8Array<ArrayBuffer>, headers?: Headers, statusCode?: number }>;
     confirmIPNetwork?(destination: string, isICMP: boolean, timeoutMillis: number): Promise<{ success: boolean, ipAddress: string | null, responseTimeMillis: number | null } | null>;
 }
 
@@ -137,7 +137,7 @@ interface CustomEventTarget<M> {
 export type BMLBrowserEventTarget = CustomEventTarget<BMLBrowserEventMap>;
 
 /* STD-B24 第二分冊(2/2) 第二編 付属2 4.4.8 */
-export type BMLBrowserFontFace = { source: string | BinaryData, descriptors?: FontFaceDescriptors | undefined };
+export type BMLBrowserFontFace = { source: string | BufferSource, descriptors?: FontFaceDescriptors | undefined };
 export type BMLBrowserFonts = {
     roundGothic?: BMLBrowserFontFace;
     boldRoundGothic?: BMLBrowserFontFace;
@@ -256,6 +256,7 @@ export class BMLBrowser {
             this.fonts.push(new FontFace(bmlBrowserFontNames.roundGothic, options.fonts?.roundGothic.source, options.fonts?.roundGothic.descriptors));
         }
         if (options.fonts?.boldRoundGothic) {
+            this.fonts.push(new FontFace(bmlBrowserFontNames.roundGothic, options.fonts?.boldRoundGothic.source, { ...options.fonts?.boldRoundGothic.descriptors, weight: "bold" }));
             this.fonts.push(new FontFace(bmlBrowserFontNames.boldRoundGothic, options.fonts?.boldRoundGothic.source, options.fonts?.boldRoundGothic.descriptors));
         } else if (options.fonts?.roundGothic) {
             this.fonts.push(new FontFace(bmlBrowserFontNames.boldRoundGothic, options.fonts?.roundGothic.source, options.fonts?.roundGothic.descriptors));

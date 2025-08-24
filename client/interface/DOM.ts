@@ -14,6 +14,8 @@ import { playAIFF } from "../arib_aiff";
 import { unicodeToJISMap } from "../unicode_to_jis_map";
 import { ModuleListEntry } from "../../server/ws_api";
 import { getTextDecoder, getTextEncoder } from "../text";
+import { DRCSGlyph, DRCSGlyphs } from "../drcs";
+import { jisToUnicodeMap } from "../jis_to_unicode_map";
 
 export namespace BML {
     type DOMString = string;
@@ -224,13 +226,35 @@ export namespace BML {
         }
     }
 
+    function hasDRCS(text: string): boolean {
+        return /[\uec00-\uecbb]/.test(text);
+    }
+
+    function renderDRCS(drcs: DRCSGlyph, colors: string[]): HTMLCanvasElement {
+        const canvas = document.createElement("canvas");
+        canvas.width = drcs.width;
+        canvas.height = drcs.height;
+        const context = canvas.getContext("2d")!;
+        for (let y = 0; y < drcs.height; y++) {
+            for (let x = 0; x < drcs.width; x++) {
+                const bit = drcs.bitmap[y * drcs.width + x];
+                if (bit) {
+                    context.fillStyle = colors[bit - 1];
+                    context.fillRect(x, y, 1, 1);
+                }
+            }
+        }
+        return canvas;
+    }
+
     // impl
     export class CharacterData extends Node {
         protected node: globalThis.CharacterData;
-        private readonly flowData?: {
+        private flowData?: {
             readonly textNode: globalThis.HTMLElement,
             readonly parentBlock: globalThis.HTMLElement,
             readonly root: ShadowRoot,
+            readonly drcs: boolean,
             textData: string,
             textNodeInRoot?: globalThis.CharacterData,
             marquee?: globalThis.HTMLElement,
@@ -243,22 +267,27 @@ export namespace BML {
             }
             const computedStyle = window.getComputedStyle(this.getParentBlock(node)!);
             const display = computedStyle.getPropertyValue("--display").trim();
-            if (display === "-wap-marquee" || (computedStyle.letterSpacing !== "normal" && computedStyle.letterSpacing !== "0px")) {
-                let textNode;
-                if (node instanceof globalThis.CDATASection) {
-                    textNode = document.createElement("arib-cdata");
-                } else {
-                    textNode = document.createElement("arib-text");
-                }
-                const textData = node.textContent ?? "";
-                node.replaceWith(textNode);
-                const root = textNode.attachShadow({ mode: "closed" });
-                const parentBlock = this.getParentBlock(textNode)!;
-                this.flowData = { textNode, parentBlock, root, textData };
-                ownerDocument.internalBMLNodeInstanceMap.set(textNode, this);
-                ownerDocument.internalBMLNodeInstanceMap.delete(node);
-            }
+            const drcs = hasDRCS(node.textContent ?? "");
             this.node = node;
+            if (drcs || display === "-wap-marquee" || (computedStyle.letterSpacing !== "normal" && computedStyle.letterSpacing !== "0px")) {
+                this.internalAddFlowData(drcs);
+            }
+        }
+
+        private internalAddFlowData(drcs: boolean) {
+            let textNode;
+            if (this.node instanceof globalThis.CDATASection) {
+                textNode = document.createElement("arib-cdata");
+            } else {
+                textNode = document.createElement("arib-text");
+            }
+            const textData = this.node.textContent ?? "";
+            this.node.replaceWith(textNode);
+            const root = textNode.attachShadow({ mode: "closed" });
+            const parentBlock = this.getParentBlock(textNode)!;
+            this.flowData = { textNode, parentBlock, root, drcs, textData };
+            this.ownerDocument.internalBMLNodeInstanceMap.set(textNode, this);
+            this.ownerDocument.internalBMLNodeInstanceMap.delete(this.node);
         }
 
         private getParentBlock(node: globalThis.Node) {
@@ -325,8 +354,55 @@ export namespace BML {
             const display = computedStyle.getPropertyValue("--display").trim();
             // Cプロファイル
             const wapMarquee = display === "-wap-marquee";
+            let fontSize = Number.parseInt(computedStyle.fontSize);
+            if (Number.isNaN(fontSize)) {
+                fontSize = 16;
+            }
             if (computedStyle.letterSpacing === "normal" || computedStyle.letterSpacing === "0px") {
-                if (flowData.textNodeInRoot == null) {
+                if (hasDRCS(text)) {
+                    // Cプロファイルでは外字は使われないためwapMarqueeは考慮しない
+                    flowData.textNodeInRoot = undefined;
+                    const children: globalThis.Node[] = [];
+                    let prev = 0;
+                    for (const match of text.matchAll(/[\uec00-\uecbb]/g)) {
+                        const prevText = text.substring(prev, match.index);
+                        if (prevText !== "") {
+                            const char = document.createElement("span");
+                            char.textContent = prevText;
+                            children.push(char);
+                        }
+                        const char = document.createElement("span");
+                        char.textContent = match[0];
+                        const drcs = this.ownerDocument.internalGetDRCS(computedStyle.fontFamily, fontSize, match[0]);
+                        if (drcs != null) {
+                            let [gray1, gray2] = computedStyle.getPropertyValue("--grayscale-color-index").split(" ").map(v => parseInt(v));
+                            if (!Number.isSafeInteger(gray1) || gray1 < 0 || gray1 > 255) {
+                                gray1 = 8;
+                            }
+                            if (!Number.isSafeInteger(gray2) || gray2 < 0 || gray2 > 255) {
+                                gray2 = 8;
+                            }
+                            const colors = [computedStyle.getPropertyValue("--clut-color-" + gray1), computedStyle.getPropertyValue("--clut-color-" + gray2), computedStyle.color]
+                            const canvas = renderDRCS(drcs, colors);
+                            char.style.backgroundImage = `url('${canvas.toDataURL()}')`;
+                            char.style.backgroundRepeat = "no-repeat";
+                            char.style.color = "transparent";
+                            char.style.display = "inline-block";
+                            char.style.width = `${drcs.width}px`;
+                            char.style.height = `${drcs.height}px`;
+                        }
+                        children.push(char);
+                        prev = match.index + match[0].length;
+                    }
+                    const prevText = text.substring(prev);
+                    if (prevText !== "") {
+                        const char = document.createElement("span");
+                        char.textContent = prevText;
+                        children.push(char);
+                    }
+                    flowData.root.replaceChildren(...children);
+                    return;
+                } else if (flowData.textNodeInRoot == null) {
                     // shadow DOMの中なので外の* {}のようなCSSは適用されない一方プロパティは継承される
                     flowData.textNodeInRoot = document.createTextNode(text);
                     if (wapMarquee) {
@@ -340,20 +416,17 @@ export namespace BML {
                     flowData.marquee = this.createMarquee(computedStyle);
                     flowData.marquee.replaceChildren(flowData.textNodeInRoot);
                     flowData.root.replaceChildren(flowData.marquee);
+                    flowData.textNodeInRoot.data = text;
+                } else {
+                    flowData.textNodeInRoot.data = text;
                 }
                 return;
             }
-            if (flowData.textNodeInRoot != null) {
-                flowData.textNodeInRoot = undefined;
-            }
+            flowData.textNodeInRoot = undefined;
             const left = flowData.textNode.clientLeft;
             const top = flowData.textNode.clientTop;
             const parent = flowData.parentBlock;
             const width = parent.clientWidth;
-            let fontSize = Number.parseInt(computedStyle.fontSize);
-            if (Number.isNaN(fontSize)) {
-                fontSize = 16;
-            }
             let letterSpacing = Number.parseInt(computedStyle.letterSpacing);
             if (Number.isNaN(letterSpacing)) {
                 letterSpacing = 0;
@@ -378,12 +451,29 @@ export namespace BML {
                     y += lineHeight;
                     continue;
                 }
-                const isFull = c.charCodeAt(0) in unicodeToJISMap;
+                const jis: number | undefined = unicodeToJISMap[c.charCodeAt(0)];
                 const char = document.createElement("span");
                 char.textContent = c;
                 char.style.display = "inline-block";
                 char.style.textAlign = "center";
-                const fontWidth = isFull ? fontSize : fontSize / 2;
+                const fontWidth = jis ? fontSize : fontSize / 2;
+                if (jis >= 0x7721 && jis <= 0x787e) {
+                    const drcs = this.ownerDocument.internalGetDRCS(computedStyle.fontFamily, fontSize, c);
+                    if (drcs != null) {
+                        let [gray1, gray2] = computedStyle.getPropertyValue("--grayscale-color-index").split(" ").map(v => parseInt(v));
+                        if (!Number.isSafeInteger(gray1) || gray1 < 0 || gray1 > 255) {
+                            gray1 = 8;
+                        }
+                        if (!Number.isSafeInteger(gray2) || gray2 < 0 || gray2 > 255) {
+                            gray2 = 8;
+                        }
+                        const colors = [computedStyle.getPropertyValue("--clut-color-" + gray1), computedStyle.getPropertyValue("--clut-color-" + gray2), computedStyle.color]
+                        const canvas = renderDRCS(drcs, colors);
+                        char.style.backgroundImage = `url('${canvas.toDataURL()}')`;
+                        char.style.backgroundRepeat = "no-repeat";
+                        char.style.color = "transparent";
+                    }
+                }
                 char.style.width = `${fontWidth}px`;
                 char.style.lineHeight = `${lineHeight}px`;
                 if (x + fontWidth > width) {
@@ -413,7 +503,7 @@ export namespace BML {
                 return false;
             }
             this.flowText(this.data);
-            return true;
+            return !this.flowData.drcs;
         }
 
         public get data(): string {
@@ -426,11 +516,19 @@ export namespace BML {
             value = String(value);
             if (this.flowData != null) {
                 this.flowData.textData = value;
-                if (this.flowData.textNodeInRoot != null) {
-                    this.flowData.textNodeInRoot.data = value;
+                if (this.flowData.textNodeInRoot != null && !hasDRCS(value)) {
+                    if (this.flowData.textNode.nodeName.toLowerCase() === "arib-text") {
+                        this.flowData.textNodeInRoot.data = value.replace(/[ \n\r\t]+/g, " ");
+                    } else {
+                        this.flowData.textNodeInRoot.data = value;
+                    }
                 } else {
                     this.flowText(value);
                 }
+                return;
+            } else if (hasDRCS(value)) {
+                this.internalAddFlowData(true);
+                this.flowText(value);
                 return;
             }
             this.node.data = value;
@@ -506,6 +604,47 @@ export namespace BML {
             this.audioNodeProvider = audioNodeProvider;
             this.inputApplication = inputApplication;
             this.setMainAudioStreamCallback = setMainAudioStreamCallback;
+        }
+
+        private readonly _drcsGlyphs: Map<string, DRCSGlyph> = new Map();
+        public internalGetDRCS(fontFamily: string, fontSize: number, char: string): DRCSGlyph | undefined {
+            let fontId = 1;
+            switch (fontFamily) {
+                case "丸ゴシック":
+                    fontId = 1;
+                    break;
+                case "角ゴシック":
+                    fontId = 2;
+                    break;
+                case "太丸ゴシック":
+                    fontId = 3;
+                    break;
+            }
+            const key = `${char}-${fontSize}-${fontSize}-${fontId}`;
+            return this._drcsGlyphs.get(key);
+        }
+
+        public internalLoadDRCS(glyphs: DRCSGlyphs[]) {
+            for (const glyph of glyphs) {
+                for (const g of glyph.glyphs) {
+                    const c = jisToUnicodeMap[(glyph.ku - 1) * 94 + glyph.ten - 1];
+                    if (typeof c !== "number") {
+                        continue;
+                    }
+                    const key = `${String.fromCharCode(c)}-${g.width}-${g.height}-${g.fontId}`;
+                    this._drcsGlyphs.set(key, g);
+                }
+            }
+            for (const node of this.node.querySelectorAll("arib-text, arib-cdata")) {
+                const cd = nodeToBMLNode(node, this.ownerDocument) as unknown as BML.CharacterData;
+                if (hasDRCS(cd.data)) {
+                    cd.internalReflow();
+                }
+            }
+        }
+
+        public internalUnloadAllDRCS() {
+            this._drcsGlyphs.clear();
         }
 
         public get documentElement(): HTMLElement {
@@ -952,11 +1091,8 @@ export namespace BML {
 
     // STD B-24 第二分冊 (2/2) 第二編 付属2 表5-3参照
     // 画像の大きさは固定
-    function fixImageSize(resolution: string, width: number, height: number, type: string): { width?: number, height?: number } {
+    function fixImageSize(resolution: string, displayWidth: string, displayHeight: string, width: number, height: number, type: string): { width?: number, height?: number } {
         type = type.toLowerCase();
-        // 表5-4参照
-        //const scaleNumerator = [256, 192, 160, 128, 96, 80, 64, 48, 32];
-        //const scaleDenominator = 128;
         const is720x480 = resolution.trim() === "720x480";
         if (type === "image/jpeg") {
             if (is720x480) {
@@ -965,7 +1101,9 @@ export namespace BML {
                 }
                 return { width, height };
             }
-            if (width === 960 && height === 540) {
+            // 960x540座標系のときは1/2にスケーリング
+            // ただし表示サイズが960x540であり、画像サイズも960x540の場合はそのまま
+            if (displayWidth === "960px" && displayHeight === "540px" && width === 960 && height === 540) {
                 return { width, height };
             }
             return { width: Math.floor(width / 2), height: Math.floor(height / 2) };
@@ -1010,9 +1148,7 @@ export namespace BML {
                 this.effect = undefined;
                 this.animation = undefined;
             }
-            // Chromeではdataが未設定でtypeが設定されている場合枠線が表示されてしまうためtypeも消す
-            this.node.removeAttribute("type");
-            this.node.removeAttribute("data");
+            this.node.querySelector("img")?.remove();
         }
 
         protected updateAnimation() {
@@ -1073,7 +1209,8 @@ export namespace BML {
                 let imageUrl: CachedFileMetadata | undefined;
                 const isPNG = aribType?.toLowerCase() === "image/x-arib-png";
                 const isMNG = aribType?.toLowerCase() === "image/x-arib-mng";
-                let imageType: string | undefined;
+                let imageWidth: number | undefined;
+                let imageHeight: number | undefined;
                 if (isPNG || isMNG) {
                     const clutCss = window.getComputedStyle(this.node).getPropertyValue("--clut");
                     const clutUrl = clutCss == null ? null : parseCSSValue(clutCss);
@@ -1098,13 +1235,6 @@ export namespace BML {
                         for (const blob of keyframes.blobs) {
                             fetched.blobUrl.set(blob, { blobUrl: blob });
                         }
-                        const { width, height } = fixImageSize(window.getComputedStyle((bmlNodeToNode(this.ownerDocument.documentElement) as globalThis.HTMLElement).querySelector("body")!).getPropertyValue("resolution"), keyframes.width, keyframes.height, (aribType ?? this.type));
-                        if (width != null && height != null) {
-                            this.node.style.maxWidth = width + "px";
-                            this.node.style.minWidth = width + "px";
-                            this.node.style.maxHeight = height + "px";
-                            this.node.style.minHeight = height + "px";
-                        }
                         // streamloopingは1固定で運用されるため考慮しない
                         // streamstatus=playのときstreampositionで指定されたフレームから再生開始
                         // streamstatus=stopのとき非表示 streampositionは0にリセットされる
@@ -1123,7 +1253,6 @@ export namespace BML {
                             imageUrl = { blobUrl: URL.createObjectURL(blob), width: png.width, height: png.height };
                             fetched.blobUrl.set(fetchedClut, imageUrl);
                         }
-                        imageType = "image/png";
                     }
                 } else if (aribType?.toLowerCase() === "image/jpeg") {
                     imageUrl = fetched.blobUrl.get("BT.709");
@@ -1140,9 +1269,7 @@ export namespace BML {
                         }
                         fetched.blobUrl.set("BT.709", imageUrl);
                     }
-                    imageType = "image/jpeg";
                 } else if (aribType?.toLowerCase() === "image/gif") {
-                    imageType = "image/gif";
                     imageUrl = { blobUrl: this.ownerDocument.resources.getCachedFileBlobUrl(fetched) };
                 } else {
                     this.delete();
@@ -1154,17 +1281,45 @@ export namespace BML {
                 }
                 if (this.ownerDocument.resources.profile !== Profile.TrProfileC) {
                     if (imageUrl.width != null && imageUrl.height != null) {
-                        const { width, height } = fixImageSize(window.getComputedStyle((bmlNodeToNode(this.ownerDocument.documentElement) as globalThis.HTMLElement).querySelector("body")!).getPropertyValue("--resolution"), imageUrl.width, imageUrl.height, (aribType ?? this.type));
-                        if (width != null && height != null) {
-                            this.node.style.maxWidth = width + "px";
-                            this.node.style.minWidth = width + "px";
-                            this.node.style.maxHeight = height + "px";
-                            this.node.style.minHeight = height + "px";
-                        }
+                        const { width: displayWidth, height: displayHeight } = window.getComputedStyle(this.node);
+                        const { width, height } = fixImageSize(
+                            window.getComputedStyle((bmlNodeToNode(this.ownerDocument.documentElement) as globalThis.HTMLElement).querySelector("body")!).getPropertyValue("--resolution"),
+                            displayWidth,
+                            displayHeight,
+                            imageUrl.width,
+                            imageUrl.height,
+                            (aribType ?? this.type)
+                        );
+                        imageWidth = width;
+                        imageHeight = height;
                     }
                 }
-                this.node.type = imageType;
-                this.node.data = imageUrl.blobUrl;
+                let img = this.node.querySelector("img");
+                if (img == null) {
+                    img = new Image();
+                    this.node.appendChild(img);
+                    img.style.position = "absolute";
+                    img.style.left = "0px";
+                    img.style.top = "0px";
+                    img.style.right = "unset";
+                    img.style.bottom = "unset";
+                    img.style.margin = "0px";
+                    img.style.padding = "0px";
+                    img.style.borderWidth = "0px";
+                    img.style.background = "none";
+                    img.style.visibility = "inherit";
+                    img.style.display = "block";
+                }
+                img.src = imageUrl.blobUrl;
+                const width = imageWidth ?? imageUrl.width;
+                const height = imageHeight ?? imageUrl.height;
+                if (width != null && height != null) {
+                    img.width = width;
+                    img.height = height;
+                } else {
+                    img.removeAttribute("width");
+                    img.removeAttribute("height");
+                }
             })();
         }
         public get type() {
@@ -1225,15 +1380,12 @@ export namespace BML {
                         const duration = Number(timing.duration);
                         const keyframes = this.effect.getKeyframes();
                         const keyframe = keyframes[Math.max(0, Math.min(value, keyframes.length - 1))];
-                        timing.delay = -(keyframe.computedOffset * duration);
-                        this.effect.updateTiming(timing);
+                        this.effect.updateTiming({ delay: -(keyframe.computedOffset * duration) });
                     }
                 }
             } else {
                 if (this.effect != null) {
-                    const timing = this.effect.getTiming();
-                    timing.delay = 0;
-                    this.effect.updateTiming(timing);
+                    this.effect.updateTiming({ delay: 0 });
                 }
                 this.node.setAttribute("streamposition", "0");
             }
@@ -1324,7 +1476,7 @@ export namespace BML {
                     // play=>pause どのフレームを表示するかは受信機依存 streampositionはそのフレームに設定される 繰り返し回数はリセット
                     this.animation.pause();
                     const duration = Number(this.effect.getTiming().duration);
-                    this.streamPosition = BMLObjectElement.offsetToFrame(this.effect.getKeyframes(), ((this.animation.currentTime! - this.animation.startTime!) % duration) / duration);
+                    this.streamPosition = BMLObjectElement.offsetToFrame(this.effect.getKeyframes(), ((Number(this.animation.currentTime!) - Number(this.animation.startTime!)) % duration) / duration);
                 } else if (prevStatus === "stop") {
                     // stop=>pause 0フレーム目が表示される
                     this.streamPosition = 0;

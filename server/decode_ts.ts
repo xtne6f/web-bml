@@ -646,7 +646,7 @@ function initializeDecodeTS(options: DecodeTSOptions, tsStream: EventEmitter) {
                     return;
                 }
                 if (moduleInfo.compressionType === CompressionType.Zlib) {
-                    moduleData = zlib.inflateSync(moduleData);
+                    moduleData = zlib.inflateSync(moduleData) as Buffer<ArrayBuffer>;
                 }
                 const mediaType = moduleInfo.contentType == null ? null : parseMediaTypeFromString(moduleInfo.contentType).mediaType;
                 // console.info(`component ${componentId.toString(16).padStart(2, "0")} module ${moduleId.toString(16).padStart(4, "0")}updated`);

@@ -1,5 +1,5 @@
 import css from "css";
-import { Resources, CachedFile, Profile } from "./resource";
+import { Resources, CachedFile, Profile, CachedFileMetadata } from "./resource";
 import { defaultCLUT } from "./default_clut";
 import { readCLUT } from "./clut";
 import { transpileCSS } from "./transpile_css";
@@ -12,6 +12,7 @@ import { Interpreter } from "./interpreter/interpreter";
 import { BMLBrowserEventTarget, Indicator, InputApplication, KeyGroup, Profile as BMLBrowserProfile } from "./bml_browser";
 import { convertJPEG } from "./arib_jpeg";
 import { getTextDecoder } from "./text";
+import { DRCSGlyphs } from "./drcs";
 // @ts-ignore
 import defaultCSS from "../public/default.css";
 // @ts-ignore
@@ -622,6 +623,7 @@ export class Content {
     }
 
     public unloadAllDRCS() {
+        this.bmlDocument.internalUnloadAllDRCS();
         for (const font of this.fonts) {
             document.fonts.delete(font);
         }
@@ -1295,7 +1297,7 @@ export class Content {
             const decl: css.Declaration = {
                 type: "declaration",
                 property: "--clut-color-" + i,
-                value: `rgba(${t[0]},${t[1]},${t[2]},${t[3] / 255})`,
+                value: `#${t[0].toString(16).padStart(2, "0")}${t[1].toString(16).padStart(2, "0")}${t[2].toString(16).padStart(2, "0")}${(t[3]).toString(16).padStart(2, "0")}`,
             };
             ret.push(decl);
             i++;
@@ -1312,20 +1314,25 @@ export class Content {
         return this.clutToDecls(clut);
     }
 
-    private async convertCSSUrl(url: string): Promise<string> {
+    private async convertCSSUrl(url: string): Promise<CachedFileMetadata | undefined> {
         const res = await this.resources.fetchResourceAsync(url);
         if (!res) {
-            return url;
+            return undefined;
         }
         // background-imageはJPEGのみ運用される (STD-B24 第二分冊(2/2) 付属2 4.4.6)
         let bt709 = res.blobUrl.get("BT.709");
         if (bt709 != null) {
-            return bt709.blobUrl;
+            return bt709;
         }
-        const bt601 = await globalThis.createImageBitmap(new Blob([res.data]));
-        bt709 = await convertJPEG(bt601);
-        res.blobUrl.set("BT.709", bt709);
-        return bt709.blobUrl;
+        try {
+            const bt601 = await globalThis.createImageBitmap(new Blob([res.data]));
+            bt709 = await convertJPEG(bt601);
+            res.blobUrl.set("BT.709", bt709);
+            return bt709;
+        } catch (e) {
+            console.error("failed to decode image", url, e);
+            return undefined;
+        }
     }
 
     private loadObjects() {
@@ -1526,6 +1533,10 @@ export class Content {
                 this.eventQueue.processEventQueue();
             }
         }
+    }
+
+    public loadDRCS(glyphs: DRCSGlyphs[]) {
+        this.bmlDocument.internalLoadDRCS(glyphs);
     }
 
     public addDRCSFont(font: FontFace) {
