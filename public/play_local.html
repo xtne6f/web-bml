@@ -63,6 +63,7 @@
             width: 240px;
             height: 135px;
         }
+
     </style>
 </head>
 
@@ -72,10 +73,16 @@
     </h1>
 
     <p>
-        ファイル<!--またはURL-->を指定するとそこに含まれるデータ放送を閲覧することが出来ます。TSファイルが外部にアップロードされることはありません。(ただし事故でデータ放送に使われる画像などのリソースのリクエストが発生する可能性は0ではない)
+        ファイル<!--またはURL-->を指定するとそこに含まれるデータ放送を閲覧することが出来ます。TSファイルが外部にアップロードされることはありません。
     </p>
     <p>
-        <label>TSファイル:<input type="file" id="ts"></label>
+        <a href="https://github.com/otya128/web-bml">https://github.com/otya128/web-bml</a>
+    </p>
+    <p>
+        TVTest用プラグイン: <a href="https://github.com/otya128/TVTDataBroadcastingWV2">TVTDataBroadcastingWV2</a>
+    </p>
+    <p>
+        <label>TSファイル: <input type="file" id="ts"></label>
     </p>
     <!--
     <p>
@@ -98,7 +105,7 @@
                 <div class="arib-video-invisible-container"
                     style="width: 960px; height: 540px; position: absolute; left: 0px; top: 0px;">
                     <div class="arib-video-container"
-                        style="width: 100%; height: 100%; max-height: 100vh; max-width: 100vw; display: block !important; visibility: visible !important;">
+                        style="width: 100%; height: 100%; max-height: 100vh; max-width: 100vw; display: block !important; visibility: visible !important; background-color: black !important">
                         <video muted="muted" autoplay="autoplay"
                             style="width: 100%; height: 100%; max-height: 100vh; max-width: 100vw; display: block !important; visibility: visible !important;"
                             id="arib-video" controls="controls"></video>
