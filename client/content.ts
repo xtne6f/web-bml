@@ -639,10 +639,11 @@ export class Content {
     private async unloadDocument() {
         // スクリプトが呼ばれているときにさらにスクリプトが呼ばれることはないがonunloadだけ例外
         this.interpreter.resetStack();
-        const onunload = this.getBody()?.getAttribute("arib-onunload");
+        const body = this.getBody();
+        const onunload = body?.getAttribute("arib-onunload");
         if (onunload != null) {
             this.eventDispatcher.setCurrentEvent({
-                target: null,
+                target: body,
                 type: "unload",
             });
             if (await this.eventQueue.executeEventHandler(onunload)) {
@@ -839,11 +840,12 @@ export class Content {
                     }
                 }
             }
-            const onload = this.getBody()?.getAttribute("arib-onload");
+            const body = this.getBody();
+            const onload = body?.getAttribute("arib-onload");
             if (onload != null) {
                 console.debug("START ONLOAD");
                 this.eventDispatcher.setCurrentEvent({
-                    target: null,
+                    target: body,
                     type: "load",
                 });
                 if (exit = await this.eventQueue.executeEventHandler(onload)) {
@@ -1339,6 +1341,9 @@ export class Content {
         if (this.resources.profile === Profile.TrProfileC) {
             this.documentElement.querySelectorAll("img").forEach(obj => {
                 const asrc = obj.getAttribute("arib-src");
+                if (!asrc) {
+                    return;
+                }
                 BML.nodeToBMLNode(obj, this.bmlDocument).src = asrc!;
             });
         }
